@@ -14,7 +14,12 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
-from opentelemetry.instrumentation.logging import LoggingInstrumentor
+
+# Add OpenTelemetry logging imports
+from opentelemetry import logs
+from opentelemetry.sdk.logs import LoggerProvider, LoggingHandler
+from opentelemetry.sdk.logs.export import BatchLogRecordProcessor
+from opentelemetry.exporter.otlp.proto.grpc.log_exporter import OTLPLogExporter
 
 def parse_size(size_str):
     """Parse human-readable size string to bytes"""
@@ -68,24 +73,31 @@ def configure_opentelemetry(endpoint):
         SERVICE_NAME: "wiki-log-generator"
     })
     
-    provider = TracerProvider(resource=resource)
+    # Set up tracing
+    trace_provider = TracerProvider(resource=resource)
+    trace_exporter = OTLPSpanExporter(endpoint=endpoint, insecure=True)
+    trace_processor = BatchSpanProcessor(trace_exporter)
+    trace_provider.add_span_processor(trace_processor)
+    trace.set_tracer_provider(trace_provider)
     
-    # Create exporter with the specified endpoint
-    exporter = OTLPSpanExporter(endpoint=endpoint, insecure=True)
-    processor = BatchSpanProcessor(exporter)
+    # Set up logging
+    log_provider = LoggerProvider(resource=resource)
+    log_exporter = OTLPLogExporter(endpoint=endpoint, insecure=True)
+    log_processor = BatchLogRecordProcessor(log_exporter)
+    log_provider.add_log_record_processor(log_processor)
+    logs.set_logger_provider(log_provider)
     
-    provider.add_span_processor(processor)
-    trace.set_tracer_provider(provider)
-    
-    # Set up logging with OpenTelemetry instrumentation
-    LoggingInstrumentor().instrument(set_logging_format=True)
-    
+    # Configure logger
     logger = logging.getLogger("wiki-log-generator")
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG)
     
     # Console handler
-    handler = logging.StreamHandler()
-    logger.addHandler(handler)
+    console_handler = logging.StreamHandler()
+    logger.addHandler(console_handler)
+    
+    # OpenTelemetry logging handler - this sends logs to the collector
+    otel_handler = LoggingHandler(logger_provider=log_provider)
+    logger.addHandler(otel_handler)
     
     return logger
 
