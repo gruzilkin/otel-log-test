@@ -15,11 +15,11 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 
-# Add OpenTelemetry logging imports
-from opentelemetry import logs
-from opentelemetry.sdk.logs import LoggerProvider, LoggingHandler
-from opentelemetry.sdk.logs.export import BatchLogRecordProcessor
-from opentelemetry.exporter.otlp.proto.grpc.log_exporter import OTLPLogExporter
+# Updated logging imports for latest stable API
+from opentelemetry import _logs
+from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 
 def parse_size(size_str):
     """Parse human-readable size string to bytes"""
@@ -80,12 +80,12 @@ def configure_opentelemetry(endpoint):
     trace_provider.add_span_processor(trace_processor)
     trace.set_tracer_provider(trace_provider)
     
-    # Set up logging
+    # Set up logging with stable API
     log_provider = LoggerProvider(resource=resource)
     log_exporter = OTLPLogExporter(endpoint=endpoint, insecure=True)
     log_processor = BatchLogRecordProcessor(log_exporter)
     log_provider.add_log_record_processor(log_processor)
-    logs.set_logger_provider(log_provider)
+    _logs.set_logger_provider(log_provider)
     
     # Configure logger
     logger = logging.getLogger("wiki-log-generator")
