@@ -91,19 +91,21 @@ def configure_opentelemetry(endpoint):
     log_provider.add_log_record_processor(log_processor)
     _logs.set_logger_provider(log_provider)
     
-    # Configure logger
+    # Configure main data logger - only sends to OTLP, not console
     logger = logging.getLogger("wiki-log-generator")
     logger.setLevel(logging.DEBUG)
-    
-    # Console handler
-    console_handler = logging.StreamHandler()
-    logger.addHandler(console_handler)
     
     # OpenTelemetry logging handler - this sends logs to the collector
     otel_handler = LoggingHandler(logger_provider=log_provider)
     logger.addHandler(otel_handler)
     
-    return logger
+    # Configure control logger for application flow messages - console only
+    control_logger = logging.getLogger("control-flow")
+    control_logger.setLevel(logging.INFO)
+    console_handler = logging.StreamHandler()
+    control_logger.addHandler(console_handler)
+    
+    return logger, control_logger
 
 # Initialize Faker for domain generation
 faker = Faker()
@@ -114,7 +116,7 @@ def get_random_wiki_article():
         # First get a random article title
         response = requests.get("https://en.wikipedia.org/api/rest_v1/page/random/summary")
         if response.status_code != 200:
-            logger.error(f"Failed to fetch random article: HTTP {response.status_code}")
+            control_logger.error(f"Failed to fetch random article: HTTP {response.status_code}")
             return None
         
         article_data = response.json()
@@ -134,7 +136,7 @@ def get_random_wiki_article():
         )
         
         if content_response.status_code != 200:
-            logger.error(f"Failed to fetch article content: HTTP {content_response.status_code}")
+            control_logger.error(f"Failed to fetch article content: HTTP {content_response.status_code}")
             return article_data  # Return summary as fallback
         
         content_data = content_response.json()
@@ -147,7 +149,7 @@ def get_random_wiki_article():
             
         return article_data
     except Exception as e:
-        logger.error(f"Error fetching Wikipedia article: {str(e)}")
+        control_logger.error(f"Error fetching Wikipedia article: {str(e)}")
         return None
 
 def get_random_text_slice(text, length=100):
@@ -195,27 +197,27 @@ def generate_log_entry(article):
     
     return log_level, text_slice
 
-def simulate_logs(target_size_bytes, interval_min=1, interval_max=5, logger=None, num_domains=10):
+def simulate_logs(target_size_bytes, interval_min=1, interval_max=5, logger=None, control_logger=None, num_domains=10):
     """Main log generation loop, stopping after generating target_size_bytes"""
     tracer = trace.get_tracer(__name__)
     total_bytes_generated = 0
     
     try:
-        logger.info(f"Will generate approximately {target_size_bytes:,} bytes of logs")
+        control_logger.info(f"Will generate approximately {target_size_bytes:,} bytes of logs")
         
         # Pre-generate domains
-        logger.info(f"Generating {num_domains} unique domain names...")
+        control_logger.info(f"Generating {num_domains} unique domain names...")
         domains = [generate_domain_name() for _ in range(num_domains)]
         
         # Fetch a single Wikipedia article to use for all logs
-        logger.info("Fetching a Wikipedia article to use for all logs...")
+        control_logger.info("Fetching a Wikipedia article to use for all logs...")
         article = get_random_wiki_article()
         
         if not article:
-            logger.error("Failed to fetch Wikipedia article. Exiting.")
+            control_logger.error("Failed to fetch Wikipedia article. Exiting.")
             return
             
-        logger.info(f"Using article: '{article.get('title')}' for log generation")
+        control_logger.info(f"Using article: '{article.get('title')}' for log generation")
         
         while total_bytes_generated < target_size_bytes:
             # Select a random domain from the pre-generated list
@@ -228,37 +230,43 @@ def simulate_logs(target_size_bytes, interval_min=1, interval_max=5, logger=None
             message_size = len(text_slice)
             
             # Create a span for this log entry with domain and article attributes
-            # All these attributes will be automatically associated with logs
             span_attributes = {
                 "domain": domain,
                 "article_id": article.get("pageid"),
                 "article_title": article.get("title")
             }
             
+            # Create extra parameters for structured logging
+            log_extras = {
+                "domain": domain,
+                "article_id": article.get("pageid"),
+                "article_title": article.get("title")
+            }
+            
             with tracer.start_as_current_span("log_entry", attributes=span_attributes):
-                # Send log with appropriate level
+                # Send log with appropriate level, including domain in extras
                 if log_level == "INFO":
-                    logger.info(text_slice)
+                    logger.info(text_slice, extra=log_extras)
                 elif log_level == "DEBUG":
-                    logger.debug(text_slice)
+                    logger.debug(text_slice, extra=log_extras)
                 elif log_level == "WARNING":
-                    logger.warning(text_slice)
+                    logger.warning(text_slice, extra=log_extras)
                 elif log_level == "ERROR":
-                    logger.error(text_slice)
+                    logger.error(text_slice, extra=log_extras)
                 
                 total_bytes_generated += message_size
             
             # Progress update for large log generations (every ~10%)
             if target_size_bytes > 1024*1024 and total_bytes_generated % (target_size_bytes // 10) < 1000:
                 percent = (total_bytes_generated / target_size_bytes) * 100
-                logger.info(f"Progress: {percent:.1f}% ({total_bytes_generated:,} / {target_size_bytes:,} bytes)")
+                control_logger.info(f"Progress: {percent:.1f}% ({total_bytes_generated:,} / {target_size_bytes:,} bytes)")
             
             # Wait random time before next log
             # time.sleep(random.uniform(interval_min, interval_max))
                 
-        logger.info(f"Log generation complete. Total bytes generated: {total_bytes_generated:,}")
+        control_logger.info(f"Log generation complete. Total bytes generated: {total_bytes_generated:,}")
     except KeyboardInterrupt:
-        logger.info(f"Log generation stopped by user. Generated {total_bytes_generated:,} bytes so far.")
+        control_logger.info(f"Log generation stopped by user. Generated {total_bytes_generated:,} bytes so far.")
 
 if __name__ == "__main__":
     # Parse arguments
@@ -269,13 +277,14 @@ if __name__ == "__main__":
         target_size = parse_size(args.log_size)
         
         # Set up OpenTelemetry with the provided endpoint
-        logger = configure_opentelemetry(args.otel_endpoint)
+        logger, control_logger = configure_opentelemetry(args.otel_endpoint)
         
-        logger.info(f"Starting OpenTelemetry log simulator with endpoint: {args.otel_endpoint}")
-        logger.info(f"Target log size: {args.log_size} ({target_size:,} bytes)")
+        control_logger.info(f"Starting OpenTelemetry log simulator with endpoint: {args.otel_endpoint}")
+        control_logger.info(f"Target log size: {args.log_size} ({target_size:,} bytes)")
         
         # Start the log simulation
-        simulate_logs(target_size, interval_min=0.5, interval_max=3, logger=logger, num_domains=args.domains)
+        simulate_logs(target_size, interval_min=0.5, interval_max=3, 
+                     logger=logger, control_logger=control_logger, num_domains=args.domains)
         
     except ValueError as e:
         print(f"Error: {str(e)}")
