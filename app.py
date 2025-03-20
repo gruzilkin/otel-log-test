@@ -63,6 +63,10 @@ def parse_arguments():
                         type=str, 
                         default='1MB',
                         help='Total amount of logs to generate (e.g., 10KB, 1MB, 2GB)')
+    parser.add_argument('--domains',
+                        type=int,
+                        default=10,
+                        help='Number of unique domains to generate (default: 10)')
     
     return parser.parse_args()
 
@@ -191,13 +195,17 @@ def generate_log_entry(article):
     
     return log_level, text_slice
 
-def simulate_logs(target_size_bytes, interval_min=1, interval_max=5, logger=None):
+def simulate_logs(target_size_bytes, interval_min=1, interval_max=5, logger=None, num_domains=10):
     """Main log generation loop, stopping after generating target_size_bytes"""
     tracer = trace.get_tracer(__name__)
     total_bytes_generated = 0
     
     try:
         logger.info(f"Will generate approximately {target_size_bytes:,} bytes of logs")
+        
+        # Pre-generate domains
+        logger.info(f"Generating {num_domains} unique domain names...")
+        domains = [generate_domain_name() for _ in range(num_domains)]
         
         # Fetch a single Wikipedia article to use for all logs
         logger.info("Fetching a Wikipedia article to use for all logs...")
@@ -210,8 +218,8 @@ def simulate_logs(target_size_bytes, interval_min=1, interval_max=5, logger=None
         logger.info(f"Using article: '{article.get('title')}' for log generation")
         
         while total_bytes_generated < target_size_bytes:
-            # Generate domain name for this log
-            domain = generate_domain_name()
+            # Select a random domain from the pre-generated list
+            domain = random.choice(domains)
             
             # Create and send log with random text slice
             log_level, text_slice = generate_log_entry(article)
@@ -246,7 +254,7 @@ def simulate_logs(target_size_bytes, interval_min=1, interval_max=5, logger=None
                 logger.info(f"Progress: {percent:.1f}% ({total_bytes_generated:,} / {target_size_bytes:,} bytes)")
             
             # Wait random time before next log
-            time.sleep(random.uniform(interval_min, interval_max))
+            # time.sleep(random.uniform(interval_min, interval_max))
                 
         logger.info(f"Log generation complete. Total bytes generated: {total_bytes_generated:,}")
     except KeyboardInterrupt:
@@ -267,7 +275,7 @@ if __name__ == "__main__":
         logger.info(f"Target log size: {args.log_size} ({target_size:,} bytes)")
         
         # Start the log simulation
-        simulate_logs(target_size, interval_min=0.5, interval_max=3, logger=logger)
+        simulate_logs(target_size, interval_min=0.5, interval_max=3, logger=logger, num_domains=args.domains)
         
     except ValueError as e:
         print(f"Error: {str(e)}")
