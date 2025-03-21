@@ -21,36 +21,31 @@ from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 
-def parse_size(size_str):
-    """Parse human-readable size string to bytes"""
-    size_str = size_str.upper().strip()
+def parse_count(count_str):
+    """Parse human-readable count string to number"""
+    count_str = count_str.upper().strip()
     
     # Define suffixes and their multipliers
     suffixes = {
-        'B': 1,
         '': 1,
-        'K': 1024,
-        'KB': 1024,
-        'M': 1024 * 1024,
-        'MB': 1024 * 1024,
-        'G': 1024 * 1024 * 1024,
-        'GB': 1024 * 1024 * 1024,
-        'T': 1024 * 1024 * 1024 * 1024,
-        'TB': 1024 * 1024 * 1024 * 1024,
+        'K': 1000,
+        'M': 1000 * 1000,
+        'G': 1000 * 1000 * 1000,
+        'T': 1000 * 1000 * 1000 * 1000,
     }
     
     # Match the pattern: number followed by an optional suffix
-    match = re.match(r'^(\d+\.?\d*)([KMGTB]B?)?$', size_str)
+    match = re.match(r'^(\d+\.?\d*)([KMGT])?$', count_str)
     if not match:
-        raise ValueError(f"Invalid size format: {size_str}")
+        raise ValueError(f"Invalid count format: {count_str}")
     
     number, suffix = match.groups()
     suffix = suffix or ''
     
     if suffix not in suffixes:
-        raise ValueError(f"Unknown size suffix: {suffix}")
+        raise ValueError(f"Unknown count suffix: {suffix}")
     
-    return float(number) * suffixes[suffix]
+    return int(float(number) * suffixes[suffix])
 
 def parse_arguments():
     """Parse command line arguments"""
@@ -61,8 +56,8 @@ def parse_arguments():
                         help='OpenTelemetry collector endpoint (default: localhost:4317)')
     parser.add_argument('--log-size', 
                         type=str, 
-                        default='1MB',
-                        help='Total amount of logs to generate (e.g., 10KB, 1MB, 2GB)')
+                        default='1000',
+                        help='Number of log records to generate (e.g., 1000, 10K, 1M)')
     parser.add_argument('--domains',
                         type=int,
                         default=10,
@@ -197,13 +192,14 @@ def generate_log_entry(article):
     
     return log_level, text_slice
 
-def simulate_logs(target_size_bytes, interval_min=1, interval_max=5, logger=None, control_logger=None, num_domains=10):
-    """Main log generation loop, stopping after generating target_size_bytes"""
+def simulate_logs(target_records, interval_min=1, interval_max=5, logger=None, control_logger=None, num_domains=10):
+    """Main log generation loop, stopping after generating target_records"""
     tracer = trace.get_tracer(__name__)
+    records_generated = 0
     total_bytes_generated = 0
     
     try:
-        control_logger.info(f"Will generate approximately {target_size_bytes:,} bytes of logs")
+        control_logger.info(f"Will generate {target_records:,} log records")
         
         # Pre-generate domains
         control_logger.info(f"Generating {num_domains} unique domain names...")
@@ -219,7 +215,7 @@ def simulate_logs(target_size_bytes, interval_min=1, interval_max=5, logger=None
             
         control_logger.info(f"Using article: '{article.get('title')}' for log generation")
         
-        while total_bytes_generated < target_size_bytes:
+        while records_generated < target_records:
             # Select a random domain from the pre-generated list
             domain = random.choice(domains)
             
@@ -254,36 +250,37 @@ def simulate_logs(target_size_bytes, interval_min=1, interval_max=5, logger=None
                 elif log_level == "ERROR":
                     logger.error(text_slice, extra=log_extras)
                 
+                records_generated += 1
                 total_bytes_generated += message_size
             
             # Progress update for large log generations (every ~10%)
-            if target_size_bytes > 1024*1024 and total_bytes_generated % (target_size_bytes // 10) < 1000:
-                percent = (total_bytes_generated / target_size_bytes) * 100
-                control_logger.info(f"Progress: {percent:.1f}% ({total_bytes_generated:,} / {target_size_bytes:,} bytes)")
+            if target_records > 1000 and records_generated % (target_records // 10) < 10:
+                percent = (records_generated / target_records) * 100
+                control_logger.info(f"Progress: {percent:.1f}% ({records_generated:,} / {target_records:,} records)")
             
             # Wait random time before next log
             # time.sleep(random.uniform(interval_min, interval_max))
                 
-        control_logger.info(f"Log generation complete. Total bytes generated: {total_bytes_generated:,}")
+        control_logger.info(f"Log generation complete. Total records: {records_generated:,}, Total bytes: {total_bytes_generated:,}")
     except KeyboardInterrupt:
-        control_logger.info(f"Log generation stopped by user. Generated {total_bytes_generated:,} bytes so far.")
+        control_logger.info(f"Log generation stopped by user. Generated {records_generated:,} records so far.")
 
 if __name__ == "__main__":
     # Parse arguments
     args = parse_arguments()
     
     try:
-        # Parse the target log size
-        target_size = parse_size(args.log_size)
+        # Parse the target log count
+        target_records = parse_count(args.log_size)
         
         # Set up OpenTelemetry with the provided endpoint
         logger, control_logger = configure_opentelemetry(args.otel_endpoint)
         
         control_logger.info(f"Starting OpenTelemetry log simulator with endpoint: {args.otel_endpoint}")
-        control_logger.info(f"Target log size: {args.log_size} ({target_size:,} bytes)")
+        control_logger.info(f"Target log count: {args.log_size} ({target_records:,} records)")
         
         # Start the log simulation
-        simulate_logs(target_size, interval_min=0.5, interval_max=3, 
+        simulate_logs(target_records, interval_min=0.5, interval_max=3, 
                      logger=logger, control_logger=control_logger, num_domains=args.domains)
         
     except ValueError as e:
